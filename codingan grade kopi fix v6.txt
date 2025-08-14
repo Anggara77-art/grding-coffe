@@ -1,0 +1,137 @@
+pkg load image;  % Memuat package image
+pkg load statistics;  % Memuat package statistics untuk K-Means
+
+% Fungsi untuk menghitung GLCM secara manual
+function glcm = compute_glcm(img_gray, offset)
+    [rows, cols] = size(img_gray);
+    glcm = zeros(256, 256); % Asumsikan gambar grayscale 8-bit (0-255)
+    
+    for i = 1:rows
+        for j = 1:cols
+            if j + offset(2) <= cols && j + offset(2) > 0 && ...
+               i + offset(1) <= rows && i + offset(1) > 0
+                pixel_value = img_gray(i, j);
+                neighbor_value = img_gray(i + offset(1), j + offset(2));
+                glcm(pixel_value + 1, neighbor_value + 1) += 1; % Indeks mulai dari 1
+            end
+        end
+    end
+    glcm = glcm / sum(glcm(:)); % Normalisasi
+end
+
+% Fungsi untuk menghitung properti GLCM
+function stats = compute_glcm_props(glcm)
+    stats.Contrast = 0;
+    stats.Energy = sum(glcm(:).^2);
+    stats.Homogeneity = 0;
+    stats.Entropy = 0;
+
+    [rows, cols] = size(glcm);
+    [x, y] = meshgrid(0:rows-1, 0:cols-1);
+
+    % Kontras
+    stats.Contrast = sum(sum((x - y).^2 .* glcm));
+
+    % Homogenitas
+    stats.Homogeneity = sum(sum(glcm ./ (1 + abs(x - y))));
+
+    % Entropy
+    stats.Entropy = -sum(sum(glcm .* log(glcm + eps)));  % Menambahkan eps untuk mencegah log(0)
+end
+
+% Fungsi utama untuk pengelompokan dan grade prediksi
+function clustering_gambar(gambar_path, grid_size)
+    % Mengimpor gambar
+    img = imread(gambar_path);
+
+    % Menampilkan gambar asli
+    figure;
+    subplot(2, 3, 1);
+    imshow(img);
+    title('Gambar Asli');
+
+    % Pre-processing gambar
+    gray_img = rgb2gray(img);
+    h = fspecial('gaussian', [5, 5], 2);
+    gray_img_filtered = imfilter(gray_img, h);
+    gray_img_adjusted = imadjust(gray_img_filtered);
+    threshold_value = 100;
+    gray_img_thresholded = gray_img_adjusted > threshold_value;
+    disk_kernel = [0 1 0; 1 1 1; 0 1 0];
+    gray_img_morph = imerode(gray_img_thresholded, disk_kernel);
+
+    % Menampilkan gambar hasil pre-processing
+    subplot(2, 3, 2);
+    imshow(gray_img_morph);
+    title('Hasil Pre-processing');
+
+    % Membagi gambar menjadi grid
+    [rows, cols] = size(gray_img);
+    row_step = floor(rows / grid_size(1));
+    col_step = floor(cols / grid_size(2));
+    
+    % Menyiapkan array untuk menyimpan fitur dan grade
+    features = [];
+    grades = {};
+    glcm_stats_table = {};
+    
+    % Hanya memproses grid pertama (1,1)
+    i = 1;
+    j = 1;
+    row_start = (i-1) * row_step + 1;
+    row_end = min(i * row_step, rows);
+    col_start = (j-1) * col_step + 1;
+    col_end = min(j * col_step, cols);
+            
+    % Ekstrak bagian kecil dari gambar
+    sub_img = gray_img(row_start:row_end, col_start:col_end);
+            
+    % Pre-processing pada bagian grid
+    sub_img_filtered = imfilter(sub_img, h);
+    sub_img_adjusted = imadjust(sub_img_filtered);
+    sub_img_thresholded = sub_img_adjusted > threshold_value;
+    sub_img_morph = imerode(sub_img_thresholded, disk_kernel);
+
+    % Hitung rata-rata RGB untuk bagian kecil
+    mean_r = mean(mean(img(row_start:row_end, col_start:col_end, 1)));
+    mean_g = mean(mean(img(row_start:row_end, col_start:col_end, 2)));
+    mean_b = mean(mean(img(row_start:row_end, col_start:col_end, 3)));
+
+    % Hitung GLCM dan fitur tekstur
+    offset = [0 1];
+    glcm = compute_glcm(sub_img_morph, offset);
+    stats = compute_glcm_props(glcm);
+            
+    % Gabungkan fitur RGB dan GLCM
+    features = [features; mean_r, mean_g, mean_b, stats.Contrast, stats.Energy, stats.Homogeneity, stats.Entropy];
+            
+    % Simpan data GLCM dalam tabel
+    glcm_stats_table = [glcm_stats_table; {sprintf('%d,%d', i, j), ...
+        stats.Contrast, stats.Energy, stats.Homogeneity, stats.Entropy}];
+            
+    % Prediksi grade berdasarkan GLCM dan RGB
+    if stats.Contrast < 5 && stats.Energy > 0.8
+        grade = 'A';
+    elseif stats.Contrast < 10 && stats.Energy > 0.5
+        grade = 'B';
+    else
+        grade = 'C';
+    end
+    grades = [grades, grade];
+
+    % Menampilkan nilai RGB, GLCM, dan grade ke command window
+    fprintf('Grid (%d,%d):\n', i, j);
+    fprintf('  RGB: R = %.2f, G = %.2f, B = %.2f\n', mean_r, mean_g, mean_b);
+    fprintf('  GLCM Features:\n');
+    fprintf('    Contrast = %.4f\n', stats.Contrast);
+    fprintf('    Energy = %.4f\n', stats.Energy);
+    fprintf('    Homogeneity = %.4f\n', stats.Homogeneity);
+    fprintf('    Entropy = %.4f\n', stats.Entropy);
+    fprintf('  Grade: %s\n\n', grade);
+end
+
+% Path gambar (diganti menjadi 0001.jpg)
+gambar_path = 'C:/Users/Windows/Documents/tugas akhir/octave-9.2.0-w64/0001.jpg';
+
+% Menjalankan fungsi clustering dengan grid 1x1
+clustering_gambar(gambar_path, [1, 1]);

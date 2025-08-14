@@ -1,0 +1,170 @@
+pkg load image;
+pkg load statistics;  % Untuk fungsi KNN
+
+% Fungsi untuk menghitung GLCM secara manual
+function glcm = compute_glcm(img_gray, offset)
+    [rows, cols] = size(img_gray);
+    glcm = zeros(256, 256); % Asumsikan gambar grayscale 8-bit (0-255)
+    
+    for i = 1:rows
+        for j = 1:cols
+            if j + offset(2) <= cols && j + offset(2) > 0 && ...
+               i + offset(1) <= rows && i + offset(1) > 0
+                pixel_value = img_gray(i, j);
+                neighbor_value = img_gray(i + offset(1), j + offset(2));
+                glcm(pixel_value + 1, neighbor_value + 1) += 1; % Indeks mulai dari 1
+            end
+        end
+    end
+    glcm = glcm / sum(glcm(:)); % Normalisasi
+end
+
+% Fungsi untuk menghitung properti GLCM
+function stats = compute_glcm_props(glcm)
+    stats.Contrast = 0;
+    stats.Energy = sum(glcm(:).^2);
+    stats.Homogeneity = 0;
+    stats.Entropy = 0;
+    stats.ClusterProminence = 0;
+    stats.ClusterShade = 0;
+
+    [rows, cols] = size(glcm);
+    [x, y] = meshgrid(0:rows-1, 0:cols-1);
+
+    % Kontras
+    stats.Contrast = sum(sum((x - y).^2 .* glcm));
+
+    % Homogenitas
+    stats.Homogeneity = sum(sum(glcm ./ (1 + abs(x - y))));
+
+    % Entropy
+    stats.Entropy = -sum(sum(glcm .* log(glcm + eps))); % Tambahkan eps untuk mencegah log(0)
+
+    % Cluster Prominence
+    stats.ClusterProminence = sum(sum(((x + y) .^ 4) .* glcm));
+
+    % Cluster Shade
+    stats.ClusterShade = sum(sum(((x + y) .^ 3) .* glcm));
+end
+
+% Fungsi utama
+function prediksi_grade(gambar_path)
+    % Mengimpor gambar
+    img = imread(gambar_path);  % Membaca gambar berdasarkan path
+
+    % Menampilkan gambar dan tabel dalam satu figure
+    figure;
+
+    % Menampilkan gambar pada subplot pertama
+    subplot(1, 3, 1);  % Membagi figure menjadi 1 baris dan 3 kolom, posisi pertama
+    imshow(img);
+    title('Gambar Biji Kopi');
+
+    % **Pre-processing**
+
+    % 1. Konversi Gambar ke Grayscale
+    gray_img = rgb2gray(img);
+
+    % 2. Menghilangkan noise menggunakan filter Gaussian (mengganti imgaussfilt dengan fspecial dan imfilter)
+    h = fspecial('gaussian', [5, 5], 2); % Filter Gaussian ukuran 5x5 dengan sigma 2
+    gray_img_filtered = imfilter(gray_img, h); % Terapkan filter pada gambar
+
+    % 3. Peningkatan kontras
+    gray_img_adjusted = imadjust(gray_img_filtered);
+
+    % 4. Thresholding (untuk segmentasi)
+    threshold_value = 100; % Nilai threshold
+    gray_img_thresholded = gray_img_adjusted > threshold_value;
+
+    % 5. Operasi morfologi menggunakan kernel manual untuk Erosi
+    % Kernel berbentuk disk ukuran 3x3
+    disk_kernel = [0 1 0; 1 1 1; 0 1 0];
+    gray_img_morph = imerode(gray_img_thresholded, disk_kernel); % Erosi menggunakan kernel manual
+
+    % Menampilkan hasil Pre-processing
+    subplot(1, 3, 2);
+    imshow(gray_img_morph);
+    title('Hasil Pre-processing');
+
+    % Menghitung rata-rata RGB setelah pre-processing
+    mean_r = mean(mean(img(:,:,1))); % Rata-rata komponen R (Red)
+    mean_g = mean(mean(img(:,:,2))); % Rata-rata komponen G (Green)
+    mean_b = mean(mean(img(:,:,3))); % Rata-rata komponen B (Blue)
+
+    % Menghitung GLCM dan fitur tekstur
+    offset = [0 1]; % Offset horizontal
+    glcm = compute_glcm(gray_img_morph, offset);
+    stats = compute_glcm_props(glcm);
+
+    % Data pelatihan - Ukuran, R (Red), G (Green), B (Blue), GLCM Kontras, Berat
+    data_train = [
+        4.8, 167, 149, 144, 0.5, 1.5;
+        5.0, 120, 100, 98, 0.8, 1.4;
+        6.1, 180, 160, 150, 0.6, 4.7;
+        6.3, 190, 170, 160, 0.4, 6.0;
+        5.8, 130, 115, 110, 0.9, 5.1;
+        5.2, 160, 140, 135, 0.7, 4.2;
+        4.9, 140, 120, 115, 0.85, 3.9;
+        6.0, 175, 155, 145, 0.65, 5.5;
+        5.5, 150, 135, 125, 0.7, 5.0;
+        5.7, 165, 150, 140, 0.6, 5.3
+    ];
+
+    % Pisahkan fitur (kolom 1-5) dan label (kolom 6)
+    X_train = data_train(:, 1:5);  % Fitur (Ukuran, R, G, B, Kontras GLCM)
+    y_train = data_train(:, 6);    % Label (Berat)
+
+    % Melatih model KNN dengan k=3
+    k = 3;
+    mdl = fitcknn(X_train, y_train, 'NumNeighbors', k);
+
+    % Data baru untuk klasifikasi berdasarkan rata-rata RGB dan GLCM kontras
+    new_data = [mean_r, mean_g, mean_b, stats.Contrast, 5.0];  % Tambahkan ukuran sebagai contoh
+
+    % Menggunakan model KNN untuk prediksi berat
+    predicted_weight = cell2mat(predict(mdl, new_data));  % Ubah hasil prediksi menjadi numerik
+
+    % Menentukan grade berdasarkan prediksi label
+    if predicted_weight <= 3
+        grade = 'Grade A';
+    elseif predicted_weight <= 5
+        grade = 'Grade B';
+    else
+        grade = 'Grade C';
+    end
+
+    % Menampilkan grade besar dalam figure
+    subplot(1, 3, 3);
+    axis off;
+
+    % Menampilkan grade pada posisi tengah figure
+    text(0.5, 0.5, ['Predicted Grade: ', grade], 'FontSize', 20, 'HorizontalAlignment', 'center', 'VerticalAlignment', 'middle', 'FontWeight', 'bold');
+    
+    % Tabel hasil RGB dan GLCM
+    str = {
+        'Red:', sprintf('%.2f', mean_r);
+        'Green:', sprintf('%.2f', mean_g);
+        'Blue:', sprintf('%.2f', mean_b);
+        'GLCM Contrast:', sprintf('%.2f', stats.Contrast);
+        'GLCM Entropy:', sprintf('%.2f', stats.Entropy);
+        'GLCM Cluster Prominence:', sprintf('%.2f', stats.ClusterProminence);
+        'GLCM Cluster Shade:', sprintf('%.2f', stats.ClusterShade);
+        'Predicted Weight:', sprintf('%.2f', predicted_weight);
+        'Grade:', grade
+    };
+
+    % Menampilkan tabel hasil RGB dan GLCM
+    for i = 1:size(str, 1)
+        text(0, 1 - i * 0.15, sprintf('%s %s', str{i, 1}, str{i, 2}), 'FontSize', 12);
+    end
+
+    % Menampilkan grade di output konsol
+    fprintf('\nHasil Prediksi untuk Gambar %s:\n', gambar_path);
+    fprintf('Grade: %s\n', grade);
+end
+
+% Path gambar untuk biji_kopi.jpeg
+gambar_path = 'C:/Users/Windows/Documents/tugas akhir/octave-9.2.0-w64/biji_kopi.jpeg';
+
+% Menjalankan fungsi prediksi untuk satu gambar
+prediksi_grade(gambar_path);
